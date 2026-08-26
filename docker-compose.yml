@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: basketiq-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+      # Set a real SECRET_KEY in your shell env or a local .env file before
+      # deploying — do not commit a real value here. Falls back to an
+      # obviously-insecure placeholder for local/demo use only.
+      - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_INSECURE_DEFAULT_DO_NOT_USE_IN_PRODUCTION}
+      - DATABASE_URL=sqlite:///./data/basketiq.db
+      - CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
+    volumes:
+      - backend-data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    container_name: basketiq-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend-data:
