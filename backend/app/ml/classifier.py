@@ -126,3 +126,9 @@ def get_models() -> "BasketModels":
     if _MODELS_INSTANCE is None:
         _MODELS_INSTANCE = BasketModels()
     return _MODELS_INSTANCE
+
+
+def __getattr__(name: str):
+    if name == "MODELS":
+        return get_models()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

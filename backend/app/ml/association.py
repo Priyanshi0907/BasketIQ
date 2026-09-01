@@ -91,6 +91,19 @@ def get_rules_df():
     return RULES_DF
 
 
+def get_frequent_itemsets():
+    _ensure_loaded()
+    return FREQUENT_ITEMSETS
+
+
+def __getattr__(name: str):
+    if name in ("RULES_DF", "FREQUENT_ITEMSETS", "ITEM_COUNTS", "PAIR_COUNTS", "SINGLE_ITEM_RULES", "MULTI_ITEM_RULES"):
+        _ensure_loaded()
+        return globals()[name]
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+
+
 def _name(pid):
     p = PRODUCT_BY_ID.get(pid)
     return p["name"] if p else pid

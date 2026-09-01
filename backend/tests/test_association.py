@@ -3,15 +3,17 @@ from app.ml.association import (
     top_associations_for,
     rules_as_records,
     frequent_itemsets_as_records,
-    RULES_DF
+    get_rules_df,
 )
 
 
 def test_rules_df_populated():
-    assert not RULES_DF.empty
-    assert "antecedents" in RULES_DF.columns
-    assert "consequents" in RULES_DF.columns
-    assert "lift" in RULES_DF.columns
+    rules_df = get_rules_df()
+    assert not rules_df.empty
+    assert "antecedents" in rules_df.columns
+    assert "consequents" in rules_df.columns
+    assert "lift" in rules_df.columns
+
 
 
 def test_top_associations_for_tea():

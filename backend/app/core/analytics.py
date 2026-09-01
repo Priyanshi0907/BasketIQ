@@ -2,8 +2,8 @@ from collections import Counter, defaultdict
 
 from app.data.catalog import PRODUCT_BY_ID, CATEGORIES
 from app.data.generator import TRANSACTIONS
-from app.ml.classifier import MODELS
-from app.ml.association import RULES_DF, FREQUENT_ITEMSETS
+from app.ml.classifier import get_models
+from app.ml.association import get_rules_df, get_frequent_itemsets
 
 
 def dashboard_summary():
@@ -48,20 +48,22 @@ def dashboard_summary():
     trend = sorted(by_date.items())[-30:]
     trend = [{"date": d, "transactions": c} for d, c in trend]
 
-    avg_lift = round(float(RULES_DF["lift"].mean()), 2) if not RULES_DF.empty else 0.0
+    rules_df = get_rules_df()
+    models = get_models()
+    avg_lift = round(float(rules_df["lift"].mean()), 2) if not rules_df.empty else 0.0
     top_categories_count = sum(1 for c in category_breakdown if c["count"] > 0)
 
     return {
         "total_transactions": n_txn,
         "avg_basket_size": avg_basket_size,
         "unique_products": len(item_counter),
-        "total_rules_mined": int(RULES_DF.shape[0]),
+        "total_rules_mined": int(rules_df.shape[0]),
         "top_products": top_products,
         "category_breakdown": category_breakdown,
         "intent_breakdown": intent_breakdown,
         "trend": trend,
-        "category_model_accuracy": MODELS.category_accuracy,
-        "intent_model_accuracy": MODELS.intent_accuracy,
+        "category_model_accuracy": models.category_accuracy,
+        "intent_model_accuracy": models.intent_accuracy,
         "avg_lift": avg_lift,
         "top_categories_count": top_categories_count,
     }
@@ -72,8 +74,12 @@ def analytics_summary():
     size_hist = Counter(basket_sizes)
     size_distribution = [{"size": s, "count": size_hist[s]} for s in sorted(size_hist)]
 
+    rules_df = get_rules_df()
+    frequent_itemsets = get_frequent_itemsets()
+    models = get_models()
+
     lift_bins = {"1.0-1.5x": 0, "1.5-2.0x": 0, "2.0-2.5x": 0, "2.5x+": 0}
-    for lift in RULES_DF["lift"]:
+    for lift in rules_df["lift"]:
         if lift < 1.5:
             lift_bins["1.0-1.5x"] += 1
         elif lift < 2.0:
@@ -96,9 +102,9 @@ def analytics_summary():
         "basket_size_distribution": size_distribution,
         "lift_distribution": lift_distribution,
         "weekday_pattern": weekday_pattern,
-        "frequent_itemsets_count": int(FREQUENT_ITEMSETS.shape[0]),
-        "rules_count": int(RULES_DF.shape[0]),
-        "category_model_accuracy": MODELS.category_accuracy,
-        "intent_model_accuracy": MODELS.intent_accuracy,
-        "training_transactions": MODELS.n_train,
+        "frequent_itemsets_count": int(frequent_itemsets.shape[0]),
+        "rules_count": int(rules_df.shape[0]),
+        "category_model_accuracy": models.category_accuracy,
+        "intent_model_accuracy": models.intent_accuracy,
+        "training_transactions": models.n_train,
     }
