@@ -114,5 +114,15 @@ class BasketModels:
         }
 
 
-# Trained once at import time and reused across requests.
-MODELS = BasketModels()
+# Trained lazily on first use (not at import time) and cached after that,
+# so the app can boot and bind its port immediately even on slow/CPU-limited
+# hosts. The first request that needs classification pays the training cost;
+# every request after that reuses the cached instance.
+_MODELS_INSTANCE = None
+
+
+def get_models() -> "BasketModels":
+    global _MODELS_INSTANCE
+    if _MODELS_INSTANCE is None:
+        _MODELS_INSTANCE = BasketModels()
+    return _MODELS_INSTANCE

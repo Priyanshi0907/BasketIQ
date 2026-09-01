@@ -22,45 +22,73 @@ from app.data.generator import TRANSACTIONS
 _baskets = [t["items"] for t in TRANSACTIONS]
 _total_txns = max(len(_baskets), 1)
 
-# Precompute transaction-level single and pairwise statistics for instant co-occurrence fallback
-ITEM_COUNTS = Counter()
-PAIR_COUNTS = defaultdict(Counter)
-for _b in _baskets:
-    for _item in _b:
-        ITEM_COUNTS[_item] += 1
-    for _i, _a in enumerate(_b):
-        for _b_item in _b[_i + 1:]:
-            PAIR_COUNTS[_a][_b_item] += 1
-            PAIR_COUNTS[_b_item][_a] += 1
+# All of the heavy lifting below (pairwise counting, FP-Growth mining, rule
+# extraction/indexing) used to run at import time. On CPU-limited hosts
+# (e.g. free-tier Render) that delayed the app from binding its port at all,
+# causing deploys to time out. It now runs lazily on first use via
+# _ensure_loaded(), so the app boots instantly; the first request that needs
+# association data pays the one-time cost and every request after reuses it.
+ITEM_COUNTS = None
+PAIR_COUNTS = None
+FREQUENT_ITEMSETS = None
+RULES_DF = None
+SINGLE_ITEM_RULES = None
+MULTI_ITEM_RULES = None
+_loaded = False
 
-_te = TransactionEncoder()
-_te_ary = _te.fit(_baskets).transform(_baskets)
-_df_encoded = pd.DataFrame(_te_ary, columns=_te.columns_)
 
-FREQUENT_ITEMSETS = fpgrowth(_df_encoded, min_support=0.005, use_colnames=True)
-FREQUENT_ITEMSETS = FREQUENT_ITEMSETS.sort_values("support", ascending=False).reset_index(drop=True)
+def _ensure_loaded():
+    global ITEM_COUNTS, PAIR_COUNTS, FREQUENT_ITEMSETS, RULES_DF
+    global SINGLE_ITEM_RULES, MULTI_ITEM_RULES, _loaded
+    if _loaded:
+        return
 
-_rules = association_rules(FREQUENT_ITEMSETS, metric="lift", min_threshold=1.0)
-_rules = _rules[_rules["confidence"] >= 0.1].copy()
-_rules["antecedents"] = _rules["antecedents"].apply(lambda s: sorted(list(s)))
-_rules["consequents"] = _rules["consequents"].apply(lambda s: sorted(list(s)))
-_rules = _rules.sort_values("lift", ascending=False).reset_index(drop=True)
-RULES_DF = _rules
+    item_counts = Counter()
+    pair_counts = defaultdict(Counter)
+    for _b in _baskets:
+        for _item in _b:
+            item_counts[_item] += 1
+        for _i, _a in enumerate(_b):
+            for _b_item in _b[_i + 1:]:
+                pair_counts[_a][_b_item] += 1
+                pair_counts[_b_item][_a] += 1
 
-# Pre-index rules for fast subset lookup
-# 1. Single item antecedent -> list of rules: {item_id: [(cid, support, confidence, lift), ...]}
-SINGLE_ITEM_RULES = defaultdict(list)
-# 2. Multi-item rules
-MULTI_ITEM_RULES = []
+    _te = TransactionEncoder()
+    _te_ary = _te.fit(_baskets).transform(_baskets)
+    _df_encoded = pd.DataFrame(_te_ary, columns=_te.columns_)
 
-for _, row in RULES_DF.iterrows():
-    ants = row["antecedents"]
-    metrics = (float(row["support"]), float(row["confidence"]), float(row["lift"]))
-    if len(ants) == 1:
-        for cid in row["consequents"]:
-            SINGLE_ITEM_RULES[ants[0]].append((cid, metrics))
-    else:
-        MULTI_ITEM_RULES.append((set(ants), row["consequents"], metrics))
+    frequent_itemsets = fpgrowth(_df_encoded, min_support=0.005, use_colnames=True)
+    frequent_itemsets = frequent_itemsets.sort_values("support", ascending=False).reset_index(drop=True)
+
+    _rules = association_rules(frequent_itemsets, metric="lift", min_threshold=1.0)
+    _rules = _rules[_rules["confidence"] >= 0.1].copy()
+    _rules["antecedents"] = _rules["antecedents"].apply(lambda s: sorted(list(s)))
+    _rules["consequents"] = _rules["consequents"].apply(lambda s: sorted(list(s)))
+    _rules = _rules.sort_values("lift", ascending=False).reset_index(drop=True)
+
+    single_item_rules = defaultdict(list)
+    multi_item_rules = []
+    for _, row in _rules.iterrows():
+        ants = row["antecedents"]
+        metrics = (float(row["support"]), float(row["confidence"]), float(row["lift"]))
+        if len(ants) == 1:
+            for cid in row["consequents"]:
+                single_item_rules[ants[0]].append((cid, metrics))
+        else:
+            multi_item_rules.append((set(ants), row["consequents"], metrics))
+
+    ITEM_COUNTS = item_counts
+    PAIR_COUNTS = pair_counts
+    FREQUENT_ITEMSETS = frequent_itemsets
+    RULES_DF = _rules
+    SINGLE_ITEM_RULES = single_item_rules
+    MULTI_ITEM_RULES = multi_item_rules
+    _loaded = True
+
+
+def get_rules_df():
+    _ensure_loaded()
+    return RULES_DF
 
 
 def _name(pid):
@@ -79,6 +107,7 @@ def _image_query(pid):
 
 
 def rules_as_records(limit=100, min_lift=0.0):
+    _ensure_loaded()
     records = []
     for _, row in RULES_DF.iterrows():
         if row["lift"] < min_lift:
@@ -98,6 +127,7 @@ def rules_as_records(limit=100, min_lift=0.0):
 
 
 def frequent_itemsets_as_records(limit=100):
+    _ensure_loaded()
     records = []
     for _, row in FREQUENT_ITEMSETS.iterrows():
         items = list(row["itemsets"])
@@ -119,6 +149,7 @@ def top_associations_for(item_ids, n=4):
     2. Single-item antecedent rules for any item in the basket.
     3. Pairwise transaction co-occurrence fallback.
     4. Category affinity fallback so results are never empty when a basket is provided."""
+    _ensure_loaded()
     basket_set = set(item_ids)
     if not basket_set:
         # Default global recommendations when basket is empty

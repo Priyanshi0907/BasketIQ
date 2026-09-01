@@ -9,9 +9,9 @@ from app.api.auth import get_current_user, get_current_user_optional
 from app.data.catalog import PRODUCTS, CATEGORIES, PRODUCT_BY_ID
 from app.data.generator import TRANSACTIONS
 from app.ml.extractor import extract_products
-from app.ml.classifier import MODELS
+from app.ml.classifier import get_models
 from app.ml.association import (
-    rules_as_records, frequent_itemsets_as_records, top_associations_for, RULES_DF
+    rules_as_records, frequent_itemsets_as_records, top_associations_for, get_rules_df
 )
 from app.core.analytics import dashboard_summary, analytics_summary
 from app.core.settings_store import get_settings, update_settings
@@ -82,7 +82,7 @@ def analyze_basket(
     matched_products, extraction_confidence = extract_products(text)
     item_ids = [p["id"] for p in matched_products]
 
-    classification = MODELS.classify(item_ids)
+    classification = get_models().classify(item_ids)
     associations = top_associations_for(item_ids, n=settings.get("recommendation_count", 4))
 
     assoc_names = ", ".join(a["name"] for a in associations[:3]) if associations else "related items"
@@ -214,7 +214,7 @@ def analytics():
 
 @router.get("/rules")
 def rules(limit: int = Query(50, le=500), min_lift: float = Query(0.0)):
-    return {"rules": rules_as_records(limit=limit, min_lift=min_lift), "total": int(RULES_DF.shape[0])}
+    return {"rules": rules_as_records(limit=limit, min_lift=min_lift), "total": int(get_rules_df().shape[0])}
 
 
 @router.get("/itemsets")
@@ -267,20 +267,10 @@ def customer_insights():
                 co_occurrence[a][b] += 1
                 co_occurrence[b][a] += 1
 
-    def _p_info(pid: str):
-        return PRODUCT_BY_ID.get(pid, {
-            "id": pid,
-            "name": pid.replace("_", " ").title(),
-            "emoji": "🛒",
-            "image_query": pid.replace("_", ","),
-            "category": "Daily Essentials",
-            "avg_price": 50.0
-        })
-
     top_popular = [
-        {"id": pid, "name": _p_info(pid)["name"], "emoji": _p_info(pid).get("emoji", "🛒"),
-         "image_query": _p_info(pid).get("image_query", "grocery"),
-         "category": _p_info(pid).get("category", "General"), "purchases": cnt}
+        {"id": pid, "name": PRODUCT_BY_ID[pid]["name"], "emoji": PRODUCT_BY_ID[pid]["emoji"],
+         "image_query": PRODUCT_BY_ID[pid]["image_query"],
+         "category": PRODUCT_BY_ID[pid]["category"], "purchases": cnt}
         for pid, cnt in popularity.most_common(10)
     ]
 
@@ -292,12 +282,10 @@ def customer_insights():
             if pair in seen_pairs:
                 continue
             seen_pairs.add(pair)
-            p_a = _p_info(a)
-            p_b = _p_info(b)
             co_pairs.append({
-                "a": p_a["name"], "b": p_b["name"], "count": cnt,
-                "a_image_query": p_a.get("image_query", "grocery"),
-                "b_image_query": p_b.get("image_query", "grocery"),
+                "a": PRODUCT_BY_ID[a]["name"], "b": PRODUCT_BY_ID[b]["name"], "count": cnt,
+                "a_image_query": PRODUCT_BY_ID[a]["image_query"],
+                "b_image_query": PRODUCT_BY_ID[b]["image_query"],
             })
     co_pairs.sort(key=lambda x: -x["count"])
 
