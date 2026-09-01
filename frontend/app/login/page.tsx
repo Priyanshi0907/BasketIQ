@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, useEffect, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { registerUser, loginUser, socialLoginUser } from "@/lib/auth";
 import {
@@ -210,6 +210,7 @@ export default function LoginPage() {
   const [agree, setAgree] = useState(true);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [serverWaking, setServerWaking] = useState(false);
 
   // Form states
   const [signInEmail, setSignInEmail] = useState("");
@@ -218,6 +219,38 @@ export default function LoginPage() {
   const [fullName, setFullName] = useState("");
   const [signUpEmail, setSignUpEmail] = useState("");
   const [signUpPassword, setSignUpPassword] = useState("");
+
+  // Silently ping the backend as soon as this page loads so Render wakes up
+  // before the user even finishes filling in the form. Show a banner if
+  // the backend takes >5 s (Render cold start) so the wait feels intentional.
+  useEffect(() => {
+    let bannerTimer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const ping = async () => {
+      bannerTimer = setTimeout(() => {
+        if (!cancelled) setServerWaking(true);
+      }, 5000);
+
+      try {
+        const apiBase =
+          process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
+          "http://localhost:8000";
+        await fetch(`${apiBase}/api/health`, { cache: "no-store" });
+      } catch {
+        // ignore — server may still be booting; ML warmup will handle the rest
+      } finally {
+        clearTimeout(bannerTimer);
+        if (!cancelled) setServerWaking(false);
+      }
+    };
+
+    ping();
+    return () => {
+      cancelled = true;
+      clearTimeout(bannerTimer);
+    };
+  }, []);
 
   const navigateToDashboard = () => {
     try {
@@ -273,7 +306,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="h-screen w-full overflow-hidden bg-cream flex items-center justify-center p-4 sm:p-6 select-text">
+    <div className="relative h-screen w-full overflow-hidden bg-cream flex flex-col items-center justify-center p-4 sm:p-6 select-text">
+      {/* Server cold-start banner — only visible when Render is waking up */}
+      {serverWaking && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-amber-50 border border-amber-200 text-amber-800 text-[13px] font-medium px-5 py-3 rounded-xl shadow-lg max-w-sm w-full">
+          <Loader2 size={15} className="animate-spin shrink-0 text-amber-600" />
+          <span>Server is waking up&hellip; first load may take ~30 s on free hosting.</span>
+        </div>
+      )}
       <div className="w-full max-w-[1080px] h-full max-h-[640px] flex rounded-[24px] overflow-hidden shadow-2xl border border-black/[0.04] bg-white">
         {/* Left — dark hero panel */}
         <div className="hidden lg:flex w-[45%] shrink-0 h-full relative flex-col justify-between overflow-hidden bg-gradient-to-br from-forest via-forest to-forest-light px-9 py-7">
