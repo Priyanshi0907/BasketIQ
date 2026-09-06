@@ -10,8 +10,9 @@ import {
   LogOut,
   ExternalLink,
   ArrowRight,
+  RefreshCw,
 } from "lucide-react";
-import { getProducts, Product } from "@/lib/api";
+import { getProducts, getDashboard, getRules, getHistory, Product } from "@/lib/api";
 import { useAuthUser } from "@/lib/auth";
 import ProductImage from "@/components/ProductImage";
 
@@ -23,41 +24,6 @@ interface NotificationItem {
   type: "alert" | "insight" | "system";
   link?: string;
 }
-
-const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: "1",
-    title: "57,773 association rules mined across 276 Indian grocery products.",
-    time: "Just now",
-    unread: true,
-    type: "system",
-    link: "/association-rules",
-  },
-  {
-    id: "2",
-    title: "High lift alert: Tea + Rusk co-purchase lift surged to 34.2x.",
-    time: "10m ago",
-    unread: true,
-    type: "alert",
-    link: "/recommendations",
-  },
-  {
-    id: "3",
-    title: "Bakery cluster update: Muffin & Bagel co-occurrences linked with coffee & butter.",
-    time: "1h ago",
-    unread: true,
-    type: "insight",
-    link: "/recommendations",
-  },
-  {
-    id: "4",
-    title: "Weekly grocery restock pattern detected in 1,240 synthetic baskets.",
-    time: "3h ago",
-    unread: false,
-    type: "insight",
-    link: "/analytics",
-  },
-];
 
 const QUICK_ACTIONS = [
   { title: "Analyze Basket in Natural Language", href: "/basket-analyzer", icon: "🌿" },
@@ -73,18 +39,116 @@ export default function HeaderControls() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const notifRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  const fetchLiveNotifications = async () => {
+    setIsRefreshing(true);
+    try {
+      const [prodsRes, dashRes, rulesRes, histRes] = await Promise.allSettled([
+        getProducts(),
+        getDashboard(),
+        getRules(5),
+        getHistory(3),
+      ]);
+
+      const prodsList = prodsRes.status === "fulfilled" ? prodsRes.value.products || [] : [];
+      if (prodsList.length > 0) setProducts(prodsList);
+
+      const dash = dashRes.status === "fulfilled" ? dashRes.value : null;
+      const rulesData = rulesRes.status === "fulfilled" ? rulesRes.value : null;
+      const historyItems = histRes.status === "fulfilled" && Array.isArray(histRes.value) ? histRes.value : [];
+
+      const totalProds = prodsList.length || (dash ? dash.unique_products : 783);
+      const totalRules = dash?.total_rules_mined || rulesData?.total || 57773;
+      const totalTxns = dash?.total_transactions ? Number(dash.total_transactions).toLocaleString() : "10,000";
+
+      const dynamicList: NotificationItem[] = [];
+
+      // 1. Most recent user analysis if available
+      if (historyItems.length > 0) {
+        const latest = historyItems[0];
+        const snippet = latest.input_text.length > 38 ? latest.input_text.slice(0, 38) + "..." : latest.input_text;
+        const cat = latest.primary_category || "General";
+        const conf = Math.round((latest.primary_confidence || 0.9) * 100);
+        dynamicList.push({
+          id: `hist-${latest.id}`,
+          title: `Recent Analysis: "${snippet}" classified into ${cat} (${conf}% match).`,
+          time: "Recent",
+          unread: true,
+          type: "insight",
+          link: "/basket-analyzer",
+        });
+      }
+
+      // 2. High lift association rule alert from actual mined rules
+      if (rulesData && rulesData.rules && rulesData.rules.length > 0) {
+        const topRule = rulesData.rules[0];
+        const ant = topRule.antecedents.join(" + ");
+        const cons = topRule.consequents.join(" + ");
+        const liftVal = typeof topRule.lift === "number" ? topRule.lift.toFixed(1) : "3.5";
+        const confVal = Math.round((topRule.confidence || 0.8) * 100);
+        dynamicList.push({
+          id: "rule-top-lift",
+          title: `High lift rule: ${ant} ➔ ${cons} (Lift: ${liftVal}x, Conf: ${confVal}%).`,
+          time: "Live Engine",
+          unread: true,
+          type: "alert",
+          link: "/association-rules",
+        });
+      }
+
+      // 3. Store-wide association rules & catalog summary
+      dynamicList.push({
+        id: "sys-rules-summary",
+        title: `${Number(totalRules).toLocaleString()} association rules mined across ${totalProds} catalog products.`,
+        time: "Real-time",
+        unread: false,
+        type: "system",
+        link: "/association-rules",
+      });
+
+      // 4. Top trending product from actual transaction metrics
+      if (dash && dash.top_products && dash.top_products.length > 0) {
+        const topP = dash.top_products[0];
+        dynamicList.push({
+          id: "top-product-insight",
+          title: `Trending item: "${topP.name}" is leading in ${topP.category} baskets (${topP.count} purchases).`,
+          time: "Active trend",
+          unread: false,
+          type: "insight",
+          link: "/dashboard",
+        });
+      }
+
+      // 5. Total market transactions processed
+      dynamicList.push({
+        id: "sys-txns-count",
+        title: `Market basket intelligence: ${totalTxns} synthetic transactions analyzed in ML pipeline.`,
+        time: "Pipeline synced",
+        unread: false,
+        type: "system",
+        link: "/analytics",
+      });
+
+      setNotifications(dynamicList);
+    } catch {
+      // Fallback in case of network issue
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
-    getProducts()
-      .then((res) => setProducts(res.products))
-      .catch(() => {});
+    fetchLiveNotifications();
+    const interval = setInterval(fetchLiveNotifications, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   // Keyboard shortcut: Cmd+K / Ctrl+K
@@ -186,53 +250,74 @@ export default function HeaderControls() {
         </button>
 
         {notifOpen && (
-          <div className="absolute right-0 top-12 w-80 bg-cream-card border border-black/[0.08] rounded-2xl shadow-xl z-40 p-4 animate-fade-in">
+          <div className="absolute right-0 top-12 w-84 sm:w-96 bg-cream-card border border-black/[0.08] rounded-2xl shadow-xl z-40 p-4 animate-fade-in">
             <div className="flex items-center justify-between pb-3 border-b border-black/[0.06] mb-3">
               <div className="flex items-center gap-2">
                 <span className="font-display text-sm font-semibold text-ink">Notifications</span>
+                <span className="flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200/60 text-[10px] font-medium px-2 py-0.5 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Live
+                </span>
                 {unreadCount > 0 && (
                   <span className="bg-clay text-white text-[10px] font-medium px-2 py-0.5 rounded-full">
                     {unreadCount} new
                   </span>
                 )}
               </div>
-              {unreadCount > 0 && (
+              <div className="flex items-center gap-2">
                 <button
-                  onClick={markAllRead}
-                  className="text-[11px] text-clay hover:underline font-medium"
+                  onClick={() => fetchLiveNotifications()}
+                  disabled={isRefreshing}
+                  className="text-muted hover:text-clay p-1 rounded-md transition-colors"
+                  title="Refresh live stream"
                 >
-                  Mark all read
+                  <RefreshCw size={12} className={isRefreshing ? "animate-spin text-clay" : ""} />
                 </button>
-              )}
+                {unreadCount > 0 && (
+                  <button
+                    onClick={markAllRead}
+                    className="text-[11px] text-clay hover:underline font-medium"
+                  >
+                    Mark all read
+                  </button>
+                )}
+              </div>
             </div>
 
-            <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 scrollbar-thin">
-              {notifications.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => {
-                    if (item.link) {
-                      router.push(item.link);
-                      setNotifOpen(false);
-                    }
-                  }}
-                  className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
-                    item.unread
-                      ? "bg-white border-clay/30 shadow-sm hover:border-clay"
-                      : "bg-cream-soft/40 border-black/[0.04] opacity-80 hover:opacity-100"
-                  }`}
-                >
-                  <div className="flex items-start gap-2">
-                    <span className="mt-0.5">
-                      {item.type === "alert" ? "⚡" : item.type === "insight" ? "💡" : "⚙️"}
-                    </span>
-                    <div className="flex-1">
-                      <div className="text-ink font-medium leading-snug">{item.title}</div>
-                      <div className="text-[10px] text-muted mt-1">{item.time}</div>
+            <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1 scrollbar-thin">
+              {notifications.length === 0 ? (
+                <div className="py-6 text-center text-xs text-muted">
+                  <div className="animate-spin w-4 h-4 border-2 border-clay border-t-transparent rounded-full mx-auto mb-2" />
+                  Connecting to live market stream...
+                </div>
+              ) : (
+                notifications.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => {
+                      if (item.link) {
+                        router.push(item.link);
+                        setNotifOpen(false);
+                      }
+                    }}
+                    className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                      item.unread
+                        ? "bg-white border-clay/30 shadow-sm hover:border-clay"
+                        : "bg-cream-soft/40 border-black/[0.04] opacity-80 hover:opacity-100"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="mt-0.5">
+                        {item.type === "alert" ? "⚡" : item.type === "insight" ? "💡" : "⚙️"}
+                      </span>
+                      <div className="flex-1">
+                        <div className="text-ink font-medium leading-snug">{item.title}</div>
+                        <div className="text-[10px] text-muted mt-1">{item.time}</div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}
