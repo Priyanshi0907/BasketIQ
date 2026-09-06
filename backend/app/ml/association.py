@@ -11,6 +11,8 @@ Exposes:
     Rules page.
   - rules_as_records: formatted records for API and UI tables.
 """
+import os
+import pickle
 from collections import Counter, defaultdict
 import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth, association_rules
@@ -19,30 +21,14 @@ from mlxtend.preprocessing import TransactionEncoder
 from app.data.catalog import PRODUCT_BY_ID, PRODUCTS
 from app.data.generator import TRANSACTIONS
 
+_CACHE_PATH = os.path.join(os.path.dirname(__file__), "_association_cache.pkl")
+
 _baskets = [t["items"] for t in TRANSACTIONS]
 _total_txns = max(len(_baskets), 1)
 
-# All of the heavy lifting below (pairwise counting, FP-Growth mining, rule
-# extraction/indexing) used to run at import time. On CPU-limited hosts
-# (e.g. free-tier Render) that delayed the app from binding its port at all,
-# causing deploys to time out. It now runs lazily on first use via
-# _ensure_loaded(), so the app boots instantly; the first request that needs
-# association data pays the one-time cost and every request after reuses it.
-ITEM_COUNTS = None
-PAIR_COUNTS = None
-FREQUENT_ITEMSETS = None
-RULES_DF = None
-SINGLE_ITEM_RULES = None
-MULTI_ITEM_RULES = None
-_loaded = False
 
-
-def _ensure_loaded():
-    global ITEM_COUNTS, PAIR_COUNTS, FREQUENT_ITEMSETS, RULES_DF
-    global SINGLE_ITEM_RULES, MULTI_ITEM_RULES, _loaded
-    if _loaded:
-        return
-
+def _compute():
+    # Precompute transaction-level single and pairwise statistics for instant co-occurrence fallback
     item_counts = Counter()
     pair_counts = defaultdict(Counter)
     for _b in _baskets:
@@ -65,10 +51,15 @@ def _ensure_loaded():
     _rules["antecedents"] = _rules["antecedents"].apply(lambda s: sorted(list(s)))
     _rules["consequents"] = _rules["consequents"].apply(lambda s: sorted(list(s)))
     _rules = _rules.sort_values("lift", ascending=False).reset_index(drop=True)
+    rules_df = _rules
 
+    # Pre-index rules for fast subset lookup
+    # 1. Single item antecedent -> list of rules: {item_id: [(cid, support, confidence, lift), ...]}
     single_item_rules = defaultdict(list)
+    # 2. Multi-item rules
     multi_item_rules = []
-    for _, row in _rules.iterrows():
+
+    for _, row in rules_df.iterrows():
         ants = row["antecedents"]
         metrics = (float(row["support"]), float(row["confidence"]), float(row["lift"]))
         if len(ants) == 1:
@@ -77,31 +68,39 @@ def _ensure_loaded():
         else:
             multi_item_rules.append((set(ants), row["consequents"], metrics))
 
-    ITEM_COUNTS = item_counts
-    PAIR_COUNTS = pair_counts
-    FREQUENT_ITEMSETS = frequent_itemsets
-    RULES_DF = _rules
-    SINGLE_ITEM_RULES = single_item_rules
-    MULTI_ITEM_RULES = multi_item_rules
-    _loaded = True
+    return {
+        "item_counts": item_counts,
+        "pair_counts": pair_counts,
+        "frequent_itemsets": frequent_itemsets,
+        "rules_df": rules_df,
+        "single_item_rules": single_item_rules,
+        "multi_item_rules": multi_item_rules,
+    }
 
 
-def get_rules_df():
-    _ensure_loaded()
-    return RULES_DF
+def _load_or_compute():
+    if os.path.exists(_CACHE_PATH):
+        try:
+            with open(_CACHE_PATH, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass  # corrupt/incompatible cache -> recompute below
+    result = _compute()
+    try:
+        with open(_CACHE_PATH, "wb") as f:
+            pickle.dump(result, f)
+    except OSError:
+        pass  # read-only filesystem -> fine, just recompute next time
+    return result
 
 
-def get_frequent_itemsets():
-    _ensure_loaded()
-    return FREQUENT_ITEMSETS
-
-
-def __getattr__(name: str):
-    if name in ("RULES_DF", "FREQUENT_ITEMSETS", "ITEM_COUNTS", "PAIR_COUNTS", "SINGLE_ITEM_RULES", "MULTI_ITEM_RULES"):
-        _ensure_loaded()
-        return globals()[name]
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-
+_result = _load_or_compute()
+ITEM_COUNTS = _result["item_counts"]
+PAIR_COUNTS = _result["pair_counts"]
+FREQUENT_ITEMSETS = _result["frequent_itemsets"]
+RULES_DF = _result["rules_df"]
+SINGLE_ITEM_RULES = _result["single_item_rules"]
+MULTI_ITEM_RULES = _result["multi_item_rules"]
 
 
 def _name(pid):
@@ -120,7 +119,6 @@ def _image_query(pid):
 
 
 def rules_as_records(limit=100, min_lift=0.0):
-    _ensure_loaded()
     records = []
     for _, row in RULES_DF.iterrows():
         if row["lift"] < min_lift:
@@ -140,7 +138,6 @@ def rules_as_records(limit=100, min_lift=0.0):
 
 
 def frequent_itemsets_as_records(limit=100):
-    _ensure_loaded()
     records = []
     for _, row in FREQUENT_ITEMSETS.iterrows():
         items = list(row["itemsets"])
@@ -162,7 +159,6 @@ def top_associations_for(item_ids, n=4):
     2. Single-item antecedent rules for any item in the basket.
     3. Pairwise transaction co-occurrence fallback.
     4. Category affinity fallback so results are never empty when a basket is provided."""
-    _ensure_loaded()
     basket_set = set(item_ids)
     if not basket_set:
         # Default global recommendations when basket is empty

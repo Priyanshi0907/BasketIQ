@@ -9,9 +9,9 @@ from app.api.auth import get_current_user, get_current_user_optional
 from app.data.catalog import PRODUCTS, CATEGORIES, PRODUCT_BY_ID
 from app.data.generator import TRANSACTIONS
 from app.ml.extractor import extract_products
-from app.ml.classifier import get_models
+from app.ml.classifier import MODELS
 from app.ml.association import (
-    rules_as_records, frequent_itemsets_as_records, top_associations_for, get_rules_df
+    rules_as_records, frequent_itemsets_as_records, top_associations_for, RULES_DF
 )
 from app.core.analytics import dashboard_summary, analytics_summary
 from app.core.settings_store import get_settings, update_settings
@@ -82,7 +82,7 @@ def analyze_basket(
     matched_products, extraction_confidence = extract_products(text)
     item_ids = [p["id"] for p in matched_products]
 
-    classification = get_models().classify(item_ids)
+    classification = MODELS.classify(item_ids)
     associations = top_associations_for(item_ids, n=settings.get("recommendation_count", 4))
 
     assoc_names = ", ".join(a["name"] for a in associations[:3]) if associations else "related items"
@@ -214,7 +214,7 @@ def analytics():
 
 @router.get("/rules")
 def rules(limit: int = Query(50, le=500), min_lift: float = Query(0.0)):
-    return {"rules": rules_as_records(limit=limit, min_lift=min_lift), "total": int(get_rules_df().shape[0])}
+    return {"rules": rules_as_records(limit=limit, min_lift=min_lift), "total": int(RULES_DF.shape[0])}
 
 
 @router.get("/itemsets")

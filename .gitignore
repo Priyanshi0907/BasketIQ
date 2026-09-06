@@ -25,9 +25,3 @@ npm-debug.log*
 
 # Backend runtime files
 backend/settings.json
-*.db
-*.sqlite
-*.sqlite3
-.coverage
-htmlcov/
-.pytest_cache/

@@ -11,7 +11,7 @@ import {
   ExternalLink,
   ArrowRight,
 } from "lucide-react";
-import { getProducts, getDashboard, getRules, Product } from "@/lib/api";
+import { getProducts, Product } from "@/lib/api";
 import { useAuthUser } from "@/lib/auth";
 import ProductImage from "@/components/ProductImage";
 
@@ -23,6 +23,41 @@ interface NotificationItem {
   type: "alert" | "insight" | "system";
   link?: string;
 }
+
+const INITIAL_NOTIFICATIONS: NotificationItem[] = [
+  {
+    id: "1",
+    title: "57,773 association rules mined across 276 Indian grocery products.",
+    time: "Just now",
+    unread: true,
+    type: "system",
+    link: "/association-rules",
+  },
+  {
+    id: "2",
+    title: "High lift alert: Tea + Rusk co-purchase lift surged to 34.2x.",
+    time: "10m ago",
+    unread: true,
+    type: "alert",
+    link: "/recommendations",
+  },
+  {
+    id: "3",
+    title: "Bakery cluster update: Muffin & Bagel co-occurrences linked with coffee & butter.",
+    time: "1h ago",
+    unread: true,
+    type: "insight",
+    link: "/recommendations",
+  },
+  {
+    id: "4",
+    title: "Weekly grocery restock pattern detected in 1,240 synthetic baskets.",
+    time: "3h ago",
+    unread: false,
+    type: "insight",
+    link: "/analytics",
+  },
+];
 
 const QUICK_ACTIONS = [
   { title: "Analyze Basket in Natural Language", href: "/basket-analyzer", icon: "🌿" },
@@ -38,7 +73,7 @@ export default function HeaderControls() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
 
@@ -47,83 +82,9 @@ export default function HeaderControls() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // 1. Fetch live product catalog
     getProducts()
-      .then((res) => setProducts(res.products || []))
+      .then((res) => setProducts(res.products))
       .catch(() => {});
-
-    // 2. Fetch live metrics to build dynamic real-time notifications
-    Promise.allSettled([getDashboard(), getRules(5), getProducts()]).then(
-      ([dashRes, rulesRes, prodsRes]) => {
-        const dash = dashRes.status === "fulfilled" ? dashRes.value : null;
-        const rulesData = rulesRes.status === "fulfilled" ? rulesRes.value : null;
-        const prods = prodsRes.status === "fulfilled" ? prodsRes.value.products : [];
-
-        const totalProds = prods.length || (dash ? dash.unique_products : 566);
-        const totalRules = dash?.total_rules_mined || rulesData?.total || 1420;
-        const totalTxns = dash?.total_transactions ? Number(dash.total_transactions).toLocaleString() : "4,000";
-
-        const dynamicNotifs: NotificationItem[] = [
-          {
-            id: "1",
-            title: `${Number(totalRules).toLocaleString()} association rules mined across ${totalProds} grocery products.`,
-            time: "Live",
-            unread: true,
-            type: "system",
-            link: "/association-rules",
-          },
-        ];
-
-        // Top lift alert from actual mined rules
-        if (rulesData && rulesData.rules && rulesData.rules.length > 0) {
-          const topRule = rulesData.rules[0];
-          const ant = topRule.antecedents.join(" + ");
-          const cons = topRule.consequents.join(" + ");
-          dynamicNotifs.push({
-            id: "2",
-            title: `High lift rule: ${ant} ➔ ${cons} (Lift: ${topRule.lift.toFixed(1)}x, Conf: ${Math.round(topRule.confidence * 100)}%).`,
-            time: "5m ago",
-            unread: true,
-            type: "alert",
-            link: "/recommendations",
-          });
-        } else {
-          dynamicNotifs.push({
-            id: "2",
-            title: "High lift alert: Tea + Rusk & Bakery co-purchases active in engine.",
-            time: "10m ago",
-            unread: true,
-            type: "alert",
-            link: "/recommendations",
-          });
-        }
-
-        // Top Category insight from dashboard
-        if (dash && dash.top_products && dash.top_products.length > 0) {
-          const topP = dash.top_products[0];
-          dynamicNotifs.push({
-            id: "3",
-            title: `Popular item surge: "${topP.name}" is trending in ${topP.category} baskets.`,
-            time: "25m ago",
-            unread: true,
-            type: "insight",
-            link: "/customer-insights",
-          });
-        }
-
-        // Dataset transaction count
-        dynamicNotifs.push({
-          id: "4",
-          title: `Market baskets analyzed: ${totalTxns} transactions processed in ML pipeline.`,
-          time: "1h ago",
-          unread: false,
-          type: "insight",
-          link: "/analytics",
-        });
-
-        setNotifications(dynamicNotifs);
-      }
-    );
   }, []);
 
   // Keyboard shortcut: Cmd+K / Ctrl+K

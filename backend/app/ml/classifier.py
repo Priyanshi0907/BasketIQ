@@ -16,6 +16,8 @@ second, so we simply retrain in-process on import/startup rather than
 shipping a pickled model file — keeping the whole pipeline transparent and
 reproducible from source.
 """
+import os
+import pickle
 from collections import Counter
 
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -114,21 +116,25 @@ class BasketModels:
         }
 
 
-# Trained lazily on first use (not at import time) and cached after that,
-# so the app can boot and bind its port immediately even on slow/CPU-limited
-# hosts. The first request that needs classification pays the training cost;
-# every request after that reuses the cached instance.
-_MODELS_INSTANCE = None
+_CACHE_PATH = os.path.join(os.path.dirname(__file__), "_models_cache.pkl")
 
 
-def get_models() -> "BasketModels":
-    global _MODELS_INSTANCE
-    if _MODELS_INSTANCE is None:
-        _MODELS_INSTANCE = BasketModels()
-    return _MODELS_INSTANCE
+def _load_or_train():
+    if os.path.exists(_CACHE_PATH):
+        try:
+            with open(_CACHE_PATH, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass  # corrupt/incompatible cache (e.g. sklearn version bump) -> retrain below
+    models = BasketModels()
+    try:
+        with open(_CACHE_PATH, "wb") as f:
+            pickle.dump(models, f)
+    except OSError:
+        pass  # read-only filesystem -> fine, just retrain next time
+    return models
 
 
-def __getattr__(name: str):
-    if name == "MODELS":
-        return get_models()
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+# Loaded from a committed cache file when available; trained (and cached)
+# on the fly otherwise.
+MODELS = _load_or_train()
